@@ -1,0 +1,7 @@
+services:
+  soundcraft-web:
+    image: ghcr.io/mikapst/soundcraft-web:latest
+    container_name: soundcraft-web
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
