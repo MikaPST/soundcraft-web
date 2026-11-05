@@ -131,8 +131,8 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/soundcraft-web:latest
-            ghcr.io/${{ github.repository_owner }}/soundcraft-web:upstream-${{ steps.upstream.outputs.sha }}
+            ghcr.io/mikapst/soundcraft-web:latest
+            ghcr.io/mikapst/soundcraft-web:upstream-${{ steps.upstream.outputs.sha }}
           labels: |
             org.opencontainers.image.title=SoundCraft Web
             org.opencontainers.image.description=Self-hosted WebAssembly build of SoundCraft
