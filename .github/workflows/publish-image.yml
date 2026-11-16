@@ -1,173 +1,479 @@
+
 name: Build and publish SoundCraft Web
+
+# ============================================================
+# TRIGGERS
+# ============================================================
+
 on:
   workflow_dispatch:
     inputs:
       upstream_tag:
-        description: "Official upstream tag (empty = latest)"
+        description: "Official upstream release tag (empty = latest)"
         required: false
         type: string
+
       force_rebuild:
-        description: "Rebuild existing release"
+        description: "Rebuild an already published release"
         required: false
         default: false
         type: boolean
+
   schedule:
     - cron: "47 3 * * *"
+
   push:
-    branches: [main]
-    paths: [".github/workflows/publish-image.yml", "Dockerfile", "nginx.conf", ".dockerignore", "docker-compose.yml"]
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-image.yml"
+      - "Dockerfile"
+      - "nginx.conf"
+      - ".dockerignore"
+      - "docker-compose.yml"
+
+# ============================================================
+# PERMISSIONS AND CONCURRENCY
+# ============================================================
+
 permissions:
   contents: write
   packages: write
+
 concurrency:
   group: soundcraft-web-publish
   cancel-in-progress: false
+
+# ============================================================
+# JOBS
+# ============================================================
+
 jobs:
   publish:
+    name: Build and publish multi-platform image
     runs-on: ubuntu-latest
     timeout-minutes: 180
+
     steps:
-      - name: Checkout packaging
+
+      # ------------------------------------------------------
+      # 01. Checkout packaging repository
+      # ------------------------------------------------------
+
+      - name: Checkout packaging repository
         uses: actions/checkout@v4
         with:
           path: packaging
-      - name: Resolve official release
-        id: release
+
+      # ------------------------------------------------------
+      # 02. Validate packaging configuration
+      # ------------------------------------------------------
+
+      - name: Validate packaging files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f packaging/Dockerfile
+          test -f packaging/nginx.conf
+          test -f packaging/.dockerignore
+
+          echo "Packaging configuration validated."
+
+      # ------------------------------------------------------
+      # 03. Resolve official upstream release
+      # ------------------------------------------------------
+
+      - name: Resolve official upstream release
+        id: upstream-release
         uses: actions/github-script@v7
         env:
           REQUESTED_TAG: ${{ inputs.upstream_tag }}
         with:
           script: |
-            const requested = (process.env.REQUESTED_TAG || '').trim();
-            const args = {owner: 'storytold', repo: 'soundcraft'};
-            const {data: release} = requested
-              ? await github.rest.repos.getReleaseByTag({...args, tag: requested})
+            const requested = (
+              process.env.REQUESTED_TAG || ""
+            ).trim();
+
+            const args = {
+              owner: "storytold",
+              repo: "soundcraft"
+            };
+
+            const { data: release } = requested
+              ? await github.rest.repos.getReleaseByTag({
+                  ...args,
+                  tag: requested
+                })
               : await github.rest.repos.getLatestRelease(args);
-            core.setOutput('tag', release.tag_name);
-            core.setOutput('url', release.html_url);
-            core.setOutput('name', release.name || `SoundCraft ${release.tag_name}`);
-            core.setOutput('prerelease', String(release.prerelease));
-      - name: Check existing release
-        id: check
+
+            if (!release.tag_name) {
+              throw new Error("No upstream release tag found");
+            }
+
+            core.setOutput("tag", release.tag_name);
+            core.setOutput("url", release.html_url);
+            core.setOutput(
+              "name",
+              release.name || `SoundCraft ${release.tag_name}`
+            );
+            core.setOutput(
+              "prerelease",
+              String(release.prerelease)
+            );
+            core.setOutput(
+              "published_at",
+              release.published_at || ""
+            );
+
+      # ------------------------------------------------------
+      # 04. Check existing MikaPST release
+      # ------------------------------------------------------
+
+      - name: Check existing packaging release
+        id: release-check
         uses: actions/github-script@v7
         env:
-          TAG: ${{ steps.release.outputs.tag }}
-          FORCE: ${{ inputs.force_rebuild }}
+          TAG: ${{ steps.upstream-release.outputs.tag }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild }}
         with:
           script: |
             let exists = false;
-            try { await github.rest.repos.getReleaseByTag({...context.repo, tag: process.env.TAG}); exists = true; }
-            catch(e) { if(e.status !== 404) throw e; }
-            core.setOutput('skip', String(exists && process.env.FORCE !== 'true' && context.eventName !== 'push'));
-      - name: Checkout SoundCraft
-        if: steps.check.outputs.skip != 'true'
+
+            try {
+              await github.rest.repos.getReleaseByTag({
+                ...context.repo,
+                tag: process.env.TAG
+              });
+
+              exists = true;
+
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            const forced =
+              process.env.FORCE_REBUILD === "true" ||
+              context.eventName === "push";
+
+            core.setOutput(
+              "skip",
+              String(exists && !forced)
+            );
+
+      # ------------------------------------------------------
+      # 05. Checkout official SoundCraft source
+      # ------------------------------------------------------
+
+      - name: Checkout SoundCraft source
+        if: steps.release-check.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: storytold/soundcraft
-          ref: ${{ steps.release.outputs.tag }}
+          ref: ${{ steps.upstream-release.outputs.tag }}
           path: upstream
-      - name: Record commit
-        if: steps.check.outputs.skip != 'true'
-        id: source
+
+      # ------------------------------------------------------
+      # 06. Record upstream source revision
+      # ------------------------------------------------------
+
+      - name: Record upstream source commit
+        if: steps.release-check.outputs.skip != 'true'
+        id: upstream-source
         shell: bash
         run: |
-          echo "sha=$(git -C upstream rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          echo "short=$(git -C upstream rev-parse --short=12 HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Install Rust and WASM target
-        if: steps.check.outputs.skip != 'true'
+          set -euo pipefail
+
+          echo "sha=$(git -C upstream rev-parse HEAD)" \
+            >> "$GITHUB_OUTPUT"
+
+          echo "short=$(git -C upstream rev-parse --short=12 HEAD)" \
+            >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------
+      # 07. Install Rust and WebAssembly target
+      # ------------------------------------------------------
+
+      - name: Install Rust and WebAssembly target
+        if: steps.release-check.outputs.skip != 'true'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.96.1"
           targets: wasm32-unknown-unknown
-      - name: Cache Rust
-        if: steps.check.outputs.skip != 'true'
+
+      # ------------------------------------------------------
+      # 08. Cache Rust dependencies
+      # ------------------------------------------------------
+
+      - name: Cache Rust dependencies
+        if: steps.release-check.outputs.skip != 'true'
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "upstream -> upstream/target"
+
+      # ------------------------------------------------------
+      # 09. Install Trunk
+      # ------------------------------------------------------
+
       - name: Install Trunk
-        if: steps.check.outputs.skip != 'true'
-        run: cargo install trunk --locked
-      - name: Compile SoundCraft
-        if: steps.check.outputs.skip != 'true'
+        if: steps.release-check.outputs.skip != 'true'
+        shell: bash
+        run: |
+          cargo install trunk --locked
+
+      # ------------------------------------------------------
+      # 10. Build SoundCraft WebAssembly application
+      # ------------------------------------------------------
+
+      - name: Build SoundCraft Web
+        if: steps.release-check.outputs.skip != 'true'
         working-directory: upstream/apps/soundcraft-web
         shell: bash
         run: |
           set -euo pipefail
+
           trunk build --release
+
           test -s ../../dist/web/index.html
-          test -n "$(find ../../dist/web -maxdepth 1 -name '*.wasm' -print -quit)"
-      - name: Prepare Docker context
-        if: steps.check.outputs.skip != 'true'
+
+          test -n "$(
+            find ../../dist/web \
+              -maxdepth 1 \
+              -type f \
+              -name '*.wasm' \
+              -print -quit
+          )"
+
+          test -n "$(
+            find ../../dist/web \
+              -maxdepth 1 \
+              -type f \
+              -name '*.js' \
+              -print -quit
+          )"
+
+          echo "SoundCraft Web build completed."
+
+      # ------------------------------------------------------
+      # 11. Prepare version-controlled Docker build context
+      # ------------------------------------------------------
+
+      - name: Prepare Docker build context
+        if: steps.release-check.outputs.skip != 'true'
         shell: bash
         run: |
           set -euo pipefail
+
           mkdir -p docker-context/site
+
+          # Copy compiled WebAssembly application
           cp -a upstream/dist/web/. docker-context/site/
-          cp packaging/Dockerfile packaging/nginx.conf packaging/.dockerignore docker-context/
-          for f in LICENSE-MIT LICENSE-APACHE NOTICE ATTRIBUTION.md; do
-            if test -f "upstream/$f"; then cp "upstream/$f" docker-context/site/; fi
+
+          # Copy version-controlled packaging files
+          cp packaging/Dockerfile docker-context/
+          cp packaging/nginx.conf docker-context/
+          cp packaging/.dockerignore docker-context/
+
+          # Preserve upstream license and attribution files
+          for file in \
+            LICENSE-MIT \
+            LICENSE-APACHE \
+            NOTICE \
+            ATTRIBUTION.md
+          do
+            if test -f "upstream/$file"; then
+              cp "upstream/$file" docker-context/site/
+            fi
           done
+
+          # Validate build context
+          test -s docker-context/site/index.html
+          test -s docker-context/Dockerfile
+          test -s docker-context/nginx.conf
+
+          echo "Docker build context prepared."
+
+      # ------------------------------------------------------
+      # 12. Set up QEMU
+      # ------------------------------------------------------
+
       - name: Set up QEMU
-        if: steps.check.outputs.skip != 'true'
+        if: steps.release-check.outputs.skip != 'true'
         uses: docker/setup-qemu-action@v3
-      - name: Set up Buildx
-        if: steps.check.outputs.skip != 'true'
+
+      # ------------------------------------------------------
+      # 13. Set up Docker Buildx
+      # ------------------------------------------------------
+
+      - name: Set up Docker Buildx
+        if: steps.release-check.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v3
-      - name: Log in to GHCR
-        if: steps.check.outputs.skip != 'true'
+
+      # ------------------------------------------------------
+      # 14. Authenticate to GitHub Container Registry
+      # ------------------------------------------------------
+
+      - name: Log in to GitHub Container Registry
+        if: steps.release-check.outputs.skip != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and publish image
-        if: steps.check.outputs.skip != 'true'
+
+      # ------------------------------------------------------
+      # 15. Build and publish multi-platform Docker image
+      # ------------------------------------------------------
+
+      - name: Build and publish Docker image
+        if: steps.release-check.outputs.skip != 'true'
         id: build
         uses: docker/build-push-action@v6
         with:
           context: ./docker-context
           file: ./docker-context/Dockerfile
+
           platforms: linux/amd64,linux/arm64
+
           push: true
+
           tags: |
             ghcr.io/mikapst/soundcraft-web:latest
-            ghcr.io/mikapst/soundcraft-web:${{ steps.release.outputs.tag }}
-            ghcr.io/mikapst/soundcraft-web:upstream-${{ steps.source.outputs.short }}
+            ghcr.io/mikapst/soundcraft-web:${{ steps.upstream-release.outputs.tag }}
+            ghcr.io/mikapst/soundcraft-web:upstream-${{ steps.upstream-source.outputs.short }}
+
+          labels: |
+            org.opencontainers.image.title=SoundCraft Web
+            org.opencontainers.image.description=Community-maintained Docker image for SoundCraft Web
+            org.opencontainers.image.source=https://github.com/MikaPST/soundcraft-web
+            org.opencontainers.image.url=https://github.com/storytold/soundcraft
+            org.opencontainers.image.revision=${{ steps.upstream-source.outputs.sha }}
+
           cache-from: type=gha
           cache-to: type=gha,mode=max
-      - name: Publish GitHub Release
-        if: steps.check.outputs.skip != 'true'
+
+      # ------------------------------------------------------
+      # 16. Report published image
+      # ------------------------------------------------------
+
+      - name: Report published Docker image
+        if: steps.release-check.outputs.skip != 'true'
+        env:
+          UPSTREAM_TAG: ${{ steps.upstream-release.outputs.tag }}
+          UPSTREAM_SHA: ${{ steps.upstream-source.outputs.sha }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          {
+            echo "## Published SoundCraft Web image"
+            echo ""
+            echo "- Image: ghcr.io/mikapst/soundcraft-web"
+            echo "- Release: ${UPSTREAM_TAG}"
+            echo "- Commit: ${UPSTREAM_SHA}"
+            echo "- Platforms: linux/amd64, linux/arm64"
+            echo "- Digest: ${IMAGE_DIGEST}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ------------------------------------------------------
+      # 17. Create or update versioned GitHub Release
+      # ------------------------------------------------------
+
+      - name: Create or update MikaPST GitHub Release
+        if: steps.release-check.outputs.skip != 'true'
         uses: actions/github-script@v7
         env:
-          TAG: ${{ steps.release.outputs.tag }}
-          NAME: ${{ steps.release.outputs.name }}
-          URL: ${{ steps.release.outputs.url }}
-          PRERELEASE: ${{ steps.release.outputs.prerelease }}
-          SHA: ${{ steps.source.outputs.sha }}
-          SHORT: ${{ steps.source.outputs.short }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          UPSTREAM_TAG: ${{ steps.upstream-release.outputs.tag }}
+          UPSTREAM_NAME: ${{ steps.upstream-release.outputs.name }}
+          UPSTREAM_URL: ${{ steps.upstream-release.outputs.url }}
+          UPSTREAM_PRERELEASE: ${{ steps.upstream-release.outputs.prerelease }}
+          UPSTREAM_PUBLISHED_AT: ${{ steps.upstream-release.outputs.published_at }}
+          UPSTREAM_SHA: ${{ steps.upstream-source.outputs.sha }}
+          UPSTREAM_SHORT_SHA: ${{ steps.upstream-source.outputs.short }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         with:
           script: |
-            const tag = process.env.TAG;
-            const {data: upstream} = await github.rest.repos.getReleaseByTag({owner:'storytold',repo:'soundcraft',tag});
-            const image = 'ghcr.io/mikapst/soundcraft-web';
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            const tag = process.env.UPSTREAM_TAG;
+            const image = "ghcr.io/mikapst/soundcraft-web";
+
+            // Retrieve official upstream release notes
+            const { data: upstream } =
+              await github.rest.repos.getReleaseByTag({
+                owner: "storytold",
+                repo: "soundcraft",
+                tag
+              });
+
+            // Generate release description
             const body = [
-              `Community-maintained Docker packaging for **${process.env.NAME}**.`,
-              '', '## Docker images',
+              `This release packages **${process.env.UPSTREAM_NAME}** as a self-hosted Docker image.`,
+              "",
+              "## Docker image",
               `- \`${image}:latest\``,
               `- \`${image}:${tag}\``,
-              `- \`${image}:upstream-${process.env.SHORT}\``,
-              '', 'Platforms: linux/amd64, linux/arm64',
-              `Upstream: ${process.env.URL}`,
-              `Commit: ${process.env.SHA}`,
-              `Digest: ${process.env.DIGEST}`,
-              '', '## Upstream release notes',
-              upstream.body || 'No upstream release notes.'
-            ].join('\n');
+              `- \`${image}:upstream-${process.env.UPSTREAM_SHORT_SHA}\``,
+              "",
+              "Supported platforms: `linux/amd64`, `linux/arm64`.",
+              "",
+              "## Upstream project",
+              `- **Official release:** [${process.env.UPSTREAM_NAME}](${process.env.UPSTREAM_URL})`,
+              `- **Upstream tag:** \`${tag}\``,
+              `- **Upstream commit:** \`${process.env.UPSTREAM_SHA}\``,
+              `- **Published upstream:** ${process.env.UPSTREAM_PUBLISHED_AT || "not specified"}`,
+              "",
+              "## Upstream release notes",
+              upstream.body || "No release notes provided.",
+              "",
+              "## Image details",
+              `- **Image digest:** \`${process.env.IMAGE_DIGEST}\``,
+              "- **Packaging:** community-maintained by MikaPST; not an official SoundCraft release.",
+              "- **Build source:** official SoundCraft source at the selected upstream release tag.",
+              "- **Build configuration:** versioned Dockerfile, nginx.conf and .dockerignore in MikaPST/soundcraft-web."
+            ].join("\n");
+
+            // Check whether the release already exists
             let existing;
-            try { existing = (await github.rest.repos.getReleaseByTag({...context.repo,tag})).data; }
-            catch(e) { if(e.status !== 404) throw e; }
-            const args = {...context.repo, name:`SoundCraft Web ${tag}`, body,
-              draft:false, prerelease:process.env.PRERELEASE === 'true'};
-            if(existing) await github.rest.repos.updateRelease({...args,release_id:existing.id});
-            else await github.rest.repos.createRelease({...args,tag_name:tag,target_commitish:context.sha});
+
+            try {
+              ({ data: existing } =
+                await github.rest.repos.getReleaseByTag({
+                  owner,
+                  repo,
+                  tag
+                }));
+
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            // Prepare release metadata
+            const args = {
+              owner,
+              repo,
+              tag_name: tag,
+              name: `SoundCraft Web ${tag}`,
+              body,
+              draft: false,
+              prerelease:
+                process.env.UPSTREAM_PRERELEASE === "true"
+            };
+
+            // Create or update release
+            if (existing) {
+              await github.rest.repos.updateRelease({
+                ...args,
+                release_id: existing.id
+              });
+
+            } else {
+              await github.rest.repos.createRelease({
+                ...args,
+                target_commitish: context.sha
+              });
+            }
