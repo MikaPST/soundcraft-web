@@ -1,8 +1,10 @@
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/storytold/soundcraft/main/assets/app-icon/hicolor/256x256/apps/ai.storyteller.soundcraft.png" width="128" height="128" alt="SoundCraft application icon">
 </p>
 
 <h1 align="center">SoundCraft Web — Docker Image</h1>
+
 <p align="center">
   A community-maintained Docker image for
   <a href="https://github.com/storytold/soundcraft">SoundCraft</a>,
@@ -10,6 +12,7 @@
   <br>
   Build automation and image publication to GitHub Container Registry (GHCR).
 </p>
+
 <p align="center">
   <a href="https://github.com/MikaPST/soundcraft-web/actions/workflows/publish-image.yml">
     <img src="https://github.com/MikaPST/soundcraft-web/actions/workflows/publish-image.yml/badge.svg" alt="Build and publish SoundCraft Web">
@@ -29,44 +32,55 @@
 
 ## Why this repository?
 
-The official SoundCraft project provides a WebAssembly-based version that can be hosted as a static website. This repository packages the web application into a Docker image to simplify self-hosting.
+The official SoundCraft project provides a WebAssembly-based version of its digital audio workstation that can be hosted as a static website. This repository builds the web application from the official upstream source code and packages the generated files into a Docker image served by NGINX.
 
 The goals are to:
 
-- Publish a matching GitHub Release only after the Docker build and push succeed.
-- Build the SoundCraft Web application from the upstream source code.
+- Build the SoundCraft Web application from the official upstream source code.
 - Publish a ready-to-run Docker image to GHCR.
-- Automatically rebuild the image every week to incorporate upstream changes.
+- Automatically build a versioned image when a new official SoundCraft release is published.
+- Publish a matching GitHub Release in this repository, using the official version and release notes.
 - Provide a convenient deployment option for Unraid Community Applications.
 - Offer a simple Docker Compose configuration for users who prefer managing containers with Compose.
 - Keep the packaging and deployment configuration separate from the upstream SoundCraft project.
+- Maintain independent, version-controlled Docker and NGINX configurations for consistent and reproducible packaging.
+- Support both AMD64 and ARM64 Docker architectures.
 
 This is a packaging and distribution project, not a fork intended to develop a separate digital audio workstation.
 
 ## How it works
 
-SoundCraft Web runs directly in the user's browser using WebAssembly. The Docker container serves the static web application through NGINX; it does not provide a remote Linux desktop or a server-side audio-processing service.
+SoundCraft Web runs directly in the user's browser using WebAssembly. The Docker container serves the compiled static web application through NGINX; it does not provide a remote Linux desktop or perform audio processing on the server.
 
-- **Browser-based DAW:** use SoundCraft's multitrack editing and mixing interface in a modern web browser.
-- **WebAssembly application:** the application is compiled to WebAssembly and runs client-side.
-- **Audio playback:** playback is routed through the browser's WebAudio API.
-- **Web graphics:** the interface uses WebGPU when available and automatically falls back to WebGL2.
-- **Demo session:** the web build opens the synthesised demo session.
-- **Self-hosted:** serve the static application from your own server and access it over your local network or through a properly configured reverse proxy.
+- **Browser-based DAW:** access SoundCraft's multitrack editing and mixing interface through a modern web browser.
+- **WebAssembly application:** the Rust application is compiled to WebAssembly and executes client-side.
+- **Audio playback:** playback is handled through the browser's WebAudio API.
+- **Graphics acceleration:** the interface uses WebGPU when available and falls back to WebGL2.
+- **Demo session:** the web application opens a synthesised demo session by default.
+- **Self-hosted:** run the application on your own server and access it over your local network or through a properly configured reverse proxy.
+- **No remote desktop:** no VNC, remote desktop session or Linux graphical environment is required.
 
-The container only serves the static application files. SoundCraft's web build has no server-side code.
+The container only serves the application files. Audio playback and graphical rendering are handled by the browser rather than the Docker host.
 
 ### Important limitations of the web build
 
-The upstream web-hosting documentation specifies that the WebAssembly build is not equivalent to the native desktop application:
+The upstream web-hosting documentation specifies that the WebAssembly build does not provide every feature of the native desktop application:
 
-- Audio playback is supported through WebAudio, but the browser may require a click or key press before audio playback can begin.
+- Audio playback is supported through WebAudio, but the browser may require a click or key press before playback can begin.
 - The web build does not support audio recording.
-- Native file dialogs are not available in the web build.
-- The web build does not expose the desktop application's control channel.
-- The web build opens the synthesised demo session rather than providing the full native desktop session workflow.
+- Native file dialogs are not available.
+- The desktop application's control channel is not exposed.
+- The application opens the synthesised demo session by default.
 
-For recording, audio-device configuration and workflows requiring native desktop integration, use one of the official desktop builds instead.
+The web application supports the following URL parameters:
+
+| Parameter | Behaviour |
+|---|---|
+| Default | Uses WebGPU when available, otherwise WebGL2 |
+| `?webgl` | Forces the WebGL2 rendering backend |
+| `?empty` | Starts with an empty session instead of the demo session |
+
+For recording, advanced audio-device configuration and workflows requiring native desktop integration, use the official desktop application.
 
 ## Docker image
 
@@ -76,13 +90,13 @@ The image is published to GitHub Container Registry:
 ghcr.io/mikapst/soundcraft-web:latest
 ```
 
-Each official upstream release is also published under its exact version tag, for example:
+Each official upstream SoundCraft release is also published under its exact version tag, for example:
 
 ```text
 ghcr.io/mikapst/soundcraft-web:vX.Y.Z
 ```
 
-Use a versioned tag if you want to keep a deployment on a specific release. The `latest` tag updates when an image is published.
+Use a versioned tag if you want to keep a deployment on a specific release. The `latest` tag updates when a new image is published.
 
 ### Option 1 — Docker Compose (recommended)
 
@@ -126,7 +140,11 @@ docker compose up -d
 docker compose down
 ```
 
-No `.env` file or persistent volume is required for this basic setup. The host port is configured in `docker-compose.yml`; by default, port `8080` on the host is mapped to port `8080` in the container. To use a different host port, change the left-hand side of the mapping. For example, `8081:8080` exposes the application on host port `8081`.
+No `.env` file or persistent volume is required for this basic setup.
+
+The host port is configured in `docker-compose.yml`; by default, port `8080` on the host is mapped to port `8080` in the container.
+
+To use a different host port, change the left-hand side of the mapping. For example, `8081:8080` exposes the application on host port `8081`.
 
 The container serves only the static web application. It does not store audio projects or provide a server-side session repository.
 
@@ -150,36 +168,108 @@ Open the application at:
 http://YOUR_SERVER_IP:8080
 ```
 
-Audio playback and graphics rendering run in the browser. Performance and compatibility therefore depend on the client device, browser, audio output and graphics support, not only on the Docker host.
+Optional CPU and memory limits can be added to the `docker run` command if needed, for example `--cpus=2 --memory=2g`.
+
+Audio playback and graphics rendering run in the browser. Performance and compatibility therefore depend primarily on the client device, browser, audio output and graphics support.
 
 ### Network access and reverse proxies
 
-The container listens for HTTP traffic on port `8080`. For external access, use a reverse proxy such as Traefik to terminate HTTPS and forward requests to the container over HTTP.
+The container listens for HTTP traffic on port `8080`.
 
-HTTPS is required for WebGPU outside `localhost`; over plain HTTP on other hosts, SoundCraft falls back to WebGL2. HTTPS also provides the secure context required by browser clipboard features.
+For external access, use a reverse proxy such as Traefik to terminate HTTPS and forward requests to the container over HTTP.
+
+HTTPS is required for WebGPU outside `localhost`. Over plain HTTP on other hosts, SoundCraft falls back to WebGL2.
+
+HTTPS also provides the secure context required by certain browser clipboard features.
 
 Do not expose an unencrypted HTTP port directly to the public Internet. Restrict access to your intended network or protect external access with HTTPS and appropriate access controls.
 
 SoundCraft's web build uses WebAudio and does not require `SharedArrayBuffer`, `Cross-Origin-Opener-Policy` or `Cross-Origin-Embedder-Policy` isolation headers.
 
+## Repository structure
+
+This repository maintains its own Docker packaging configuration while retrieving the official SoundCraft application source during automated builds.
+
+```text
+soundcraft-web/
+├── .github/
+│   └── workflows/
+│       └── publish-image.yml
+├── .dockerignore
+├── Dockerfile
+├── nginx.conf
+├── docker-compose.yml
+└── README.md
+```
+
+| File | Purpose |
+|---|---|
+| `Dockerfile` | Defines the NGINX runtime image used to serve the compiled SoundCraft Web application. |
+| `nginx.conf` | Configures HTTP delivery, WebAssembly MIME types, compression, caching, security headers and health endpoint. |
+| `.dockerignore` | Excludes unnecessary files and directories from the Docker build context. |
+| `docker-compose.yml` | Provides a ready-to-use deployment configuration for Docker Compose. |
+| `.github/workflows/publish-image.yml` | Automates upstream release detection, Rust and Trunk compilation, multi-platform Docker builds, GHCR publication and GitHub Releases. |
+| `README.md` | Documents the project, packaging architecture and deployment methods. |
+
+### Docker build architecture
+
+The Docker image is built using the official SoundCraft source code, combined with the packaging configuration maintained in this repository.
+
+The build process follows these steps:
+
+1. GitHub Actions identifies the latest official SoundCraft release or the version explicitly requested.
+2. The corresponding upstream source code is checked out into a temporary `upstream/` directory.
+3. The workflow installs the Rust toolchain, the WebAssembly compilation target and Trunk.
+4. SoundCraft Web is compiled from `upstream/apps/soundcraft-web` using `trunk build --release`.
+5. The generated static application is retrieved from `upstream/dist/web/`.
+6. The repository's version-controlled `Dockerfile`, `nginx.conf` and `.dockerignore` are copied into a temporary `docker-context/` directory alongside the compiled application.
+7. Docker Buildx uses this prepared context and the repository's Dockerfile to create the NGINX runtime image.
+8. The resulting Docker images are published to GHCR for `linux/amd64` and `linux/arm64`.
+9. After successful publication, a matching GitHub Release is created or updated.
+
+This approach keeps the application source code aligned with official SoundCraft releases while allowing Docker packaging, runtime configuration and build automation to be maintained independently.
+
+Unlike the previous workflow, the Dockerfile and NGINX configuration are no longer generated dynamically inside GitHub Actions.
+
+Both files are now maintained directly in this repository, making the packaging easier to review, test and update.
+
+The runtime container uses NGINX on port `8080` and provides:
+
+- Static delivery of the compiled SoundCraft Web application.
+- Correct MIME types for WebAssembly and JavaScript files.
+- Gzip compression for supported assets.
+- Appropriate caching for generated application files.
+- HTTP security headers.
+- A `/healthz` endpoint and Docker health check.
+- No requirement for a database, persistent application volume or GPU passthrough.
+
+> [!NOTE]
+> The build process follows the currently supported upstream SoundCraft Web structure. Future upstream releases may introduce changes to Rust, Trunk, dependencies or application paths that require corresponding packaging updates.
+
 ## Automated builds
 
-GitHub Actions checks the official [SoundCraft releases](https://github.com/storytold/soundcraft/releases), builds the WebAssembly application from the selected upstream tag and publishes the image to GHCR.
+GitHub Actions checks the official SoundCraft repository for new published releases.
 
 | Trigger | Behaviour |
 |---|---|
-| Weekly schedule | Checks the latest official SoundCraft release and builds it if it has not already been published here |
-| Manual workflow dispatch | Builds the latest official release, or a specified `upstream_tag` |
-| Force rebuild | Rebuilds an already published version with `force_rebuild: true` |
-| Changes to packaging files on `main` | Rebuilds the current official upstream release with the updated workflow |
+| Daily schedule | Checks the latest official SoundCraft release and builds it if it has not already been published here |
+| Manual workflow dispatch | Builds the latest official release, or a specific upstream tag when provided |
+| Force rebuild | Rebuilds an already published upstream version and updates its MikaPST Release |
+| Packaging changes on `main` | Rebuilds the latest official upstream release when the workflow, Dockerfile, NGINX configuration or `.dockerignore` changes |
 
-### Published tags
+Each successful build publishes the following GHCR tags:
 
-- `latest` — the latest successfully published image (mutable tag).
-- `<upstream-version>` — the exact official upstream tag, for example `vX.Y.Z`.
-- `upstream-<commit>` — the upstream source commit used for the image (first 12 hexadecimal characters).
+- `latest` — the most recently packaged official SoundCraft release.
+- `<upstream-version>` — the exact upstream release tag, for example `vX.Y.Z`.
+- `upstream-<commit>` — the first 12 characters of the upstream source commit used for the image.
 
-The image targets both `linux/amd64` and `linux/arm64`. The workflow checks out **the official upstream release tag**, rather than compiling `main` as the versioned source.
+The build targets `linux/amd64` and `linux/arm64`.
+
+It checks out the official SoundCraft source at the selected release tag, compiles the WebAssembly application and packages the resulting static files using the version-controlled Dockerfile and NGINX configuration maintained in this repository.
+
+The workflow is idempotent: scheduled and ordinary manual runs skip a version that already has a Release in this repository. A manual run can force a rebuild when needed.
+
+Changes pushed to the monitored packaging files trigger a rebuild of the current latest upstream release.
 
 ### GitHub Releases
 
@@ -188,43 +278,63 @@ After a successful Docker build and GHCR push, the workflow creates or updates a
 The Release badge at the top of this README updates automatically. Scheduled runs skip versions already released here. You can force a rebuild from **Actions → Build and publish SoundCraft Web → Run workflow**.
 
 > [!IMPORTANT]
-> A GitHub Release is created only after the Docker image has been successfully published. The `latest` tag may change after a rebuild; pin a versioned image tag for a stable deployment. Auxiliary source repositories (for example `craft-fonts`) may be checked out separately and are not necessarily pinned to the upstream release commit.
+> A GitHub Release is created only after the Docker image has been successfully published. The `latest` tag may change after a rebuild; pin a versioned image tag for a stable deployment.
+
+SoundCraft is under active development. Test new images before relying on them for important work.
 
 ## Unraid Community Applications
 
 This image is intended to be distributed through the maintainer's existing Unraid Community Applications repository.
 
-The Unraid template references the published GHCR image and provides configuration for the web port.
+The Unraid template references the published GHCR image and provides configuration for the web port and resource limits.
 
 - **Unraid Community Applications repository:** [MikaPST/unraid-community-apps](https://github.com/MikaPST/unraid-community-apps)
-- **SoundCraft Web template:** to be added when the template is published.
+- **SoundCraft Web template:** [soundcraft-web.xml](https://github.com/MikaPST/unraid-community-apps/blob/main/templates/soundcraft-web.xml)
 
-This repository contains the image build, publication workflow and Docker Compose configuration. The Unraid Community Applications template is maintained separately.
-- **Template:** [soundcraft-web.xml](https://github.com/MikaPST/unraid-community-apps/blob/main/templates/soundcraft-web.xml)
+This repository contains the Docker packaging configuration, image build and publication workflow, and Docker Compose configuration.
+
+The Unraid Community Applications template is maintained separately.
 
 ## Upstream project
 
-SoundCraft is an open-source digital audio workstation (DAW), built in pure Rust by the ArtCraft Team and its contributors. It provides a multitrack editing and mixing workflow, with audio and MIDI tracks, automation, built-in effects and instruments, and audio export in the native application.
+SoundCraft is an open-source digital audio workstation developed by the ArtCraft Team and its contributors.
+
+The application provides multitrack editing and mixing, audio and MIDI tracks, automation, built-in effects and instruments, and audio export capabilities in its native desktop version.
 
 - **Source code:** [storytold/soundcraft](https://github.com/storytold/soundcraft)
 - **Official website:** [getartcraft.com/apps/soundcraft](https://getartcraft.com/apps/soundcraft)
 - **Official web hosting guide:** [Hosting SoundCraft for the web](https://github.com/storytold/soundcraft/blob/main/packaging/web/README.md)
 - **Official releases:** [SoundCraft releases](https://github.com/storytold/soundcraft/releases)
 
-The upstream web application is built with Trunk from `apps/soundcraft-web`. This repository builds that browser application from upstream source and packages the generated static files in an NGINX image. It does not modify the SoundCraft application itself.
+This repository builds the Docker image from the official SoundCraft source at the selected release tag, using independently maintained Docker packaging files.
 
-The MikaPST GitHub Release tracks the upstream version but represents independent Docker packaging, not an official SoundCraft distribution.
+The MikaPST Release tracks the upstream version but represents community-maintained Docker packaging, not an official SoundCraft release.
 
 ## License and attribution
 
-SoundCraft is dual-licensed under the **MIT License or Apache License 2.0**, at the user's option. Copyright belongs to the ArtCraft Team and SoundCraft contributors.
+SoundCraft is dual-licensed under the **MIT License or Apache License 2.0**, at the user's option.
+
+Copyright belongs to the ArtCraft Team and SoundCraft contributors.
 
 The upstream project includes license and attribution information for the application and bundled third-party components. These notices and the applicable license files must be preserved when redistributing the application.
 
-The Docker packaging files in this repository are maintained separately from the upstream application. This repository does not claim ownership of SoundCraft or its bundled assets.
+- [Upstream MIT License](https://github.com/storytold/soundcraft/blob/main/LICENSE-MIT)
+- [Upstream Apache License 2.0](https://github.com/storytold/soundcraft/blob/main/LICENSE-APACHE)
+- [Upstream NOTICE](https://github.com/storytold/soundcraft/blob/main/NOTICE)
+- [Upstream asset attributions](https://github.com/storytold/soundcraft/blob/main/ATTRIBUTION.md)
+
+The Docker packaging process copies the available upstream license and attribution files into the published runtime image.
+
+The licenses for the upstream application do not automatically determine the license of the packaging files maintained in this repository. Refer to the repository's own `LICENSE` file, if provided, for the terms applicable to those files.
+
+The SoundCraft name, ArtCraft branding and logos remain subject to their respective trademark and usage terms.
+
+This repository is an independent community-maintained packaging project and is **not an official SoundCraft release**. It is not affiliated with or endorsed by the SoundCraft or ArtCraft maintainers.
 
 ## Disclaimer
 
-This is an independent community packaging project and is not affiliated with, endorsed by, or sponsored by the ArtCraft Team.
+SoundCraft is under active development. Features, compatibility and behaviour may change between builds.
 
-SoundCraft is provided by its upstream authors under its own license and development status. Use this Docker image at your own risk and consult the official repository for the latest information, limitations and notices.
+Use the application and its generated audio content at your own discretion.
+
+Consult the official upstream repository for the latest information, limitations and release notes.
